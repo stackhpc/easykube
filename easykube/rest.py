@@ -52,6 +52,14 @@ class Client(httpx.AsyncClient):
             self.raise_for_status(response)
         return response
 
+    def stream(self, method, url, **kwargs):
+        params = kwargs.get("params")
+        if params:
+            self.logger.info("[STREAM] %s %s %s", method, url, params)
+        else:
+            self.logger.info("[STREAM] %s %s", method, url)
+        return super().stream(method, url, **kwargs)
+
     async def get(self, url, **kwargs):
         return await self.request("GET", url, **kwargs)
 

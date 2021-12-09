@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import dataclasses
+import json
 import typing
 
 from . import rest
@@ -218,6 +219,11 @@ class Resource(rest.Resource):
                 f"{k}={v}"
                 for k, v in params.pop("labels").items()
             )
+        if "fields" in params:
+            params["fieldSelector"] = ",".join(
+                f"{k}={v}"
+                for k, v in params.pop("fields").items()
+            )
         # Begin with either /api or /apis depending whether the api version is the core API
         prefix = "/apis" if "/" in self.api_version else "/api"
         if self.namespaced and not all_namespaces:
@@ -268,3 +274,44 @@ class Resource(rest.Resource):
         await self.ensure_initialised()
         path, params = self.prepare_path(**params)
         await self.client.delete(path, params = params)
+
+    async def watch_list(self, **params):
+        """
+        Watches the list of resource instances for changes.
+
+        Returns a tuple of (initial state, async iterator of watch events).
+        """
+        # This behaviour mimics "kubectl get <resource> -w"
+        await self.ensure_initialised()
+        path, params = self.prepare_path(**params)
+        # Get the initial state and the resource version using the same logic as list
+        # We can't actually use list because we need the full response, not just the items
+        initial_state = []
+        resource_version = None
+        async for response in self.client.paginate(path, params = params):
+            resource_version = response.json()["metadata"]["resourceVersion"]
+            initial_state.extend(self.wrap_instance(i) for i in self.extract_list(response))
+        # Define the async iterator for the watch events
+        async def watch_events():
+            watch_params = params.copy()
+            watch_params.update({ "watch": 1, "resourceVersion": resource_version })
+            stream = self.client.stream("GET", path, params = watch_params, timeout = None)
+            async with stream as response:
+                async for chunk in response.aiter_bytes():
+                    yield json.loads(chunk)
+        # Return the (initial state, watch events) tuple
+        return initial_state, watch_events()
+
+    async def watch_one(self, id, *, namespace = None):
+        """
+        Watches a single resource instance for changes.
+
+        Returns a tuple of (initial state, async iterator of watch events).
+        """
+        # Just watch the list but with a field selector
+        # We also extract the single object from the initial state
+        initial_state, events = await self.watch_list(
+            fields = { "metadata.name": id },
+            namespace = namespace
+        )
+        return next(iter(initial_state), None), events
