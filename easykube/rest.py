@@ -1,4 +1,6 @@
+from contextlib import asynccontextmanager
 import logging
+from urllib.parse import urlencode
 
 import httpx
 
@@ -16,6 +18,9 @@ class PropertyDict(dict):
             return self[name]
         except KeyError:
             raise AttributeError(f"'{self.__class__.__name__}' has no attribute '{name}'")
+
+    def __setattr__(self, name, value):
+        self[name] = value
 
 
 class Client(httpx.AsyncClient):
@@ -41,24 +46,24 @@ class Client(httpx.AsyncClient):
         # By default, raise the httpx exception
         response.raise_for_status()
 
-    async def request(self, method, url, *, raise_exceptions = True, **kwargs):
+    async def request(self, method, url, **kwargs):
         response = await super().request(method, url, **kwargs)
         params = kwargs.get("params")
         if params:
-            self.logger.info("%s %s %s %s", method, url, response.status_code, params)
-        else:
-            self.logger.info("%s %s %s", method, url, response.status_code)
-        if raise_exceptions:
-            self.raise_for_status(response)
+            url = url + "?" + urlencode(params)
+        self.logger.info("%s %s %s", method, url, response.status_code)
+        self.raise_for_status(response)
         return response
 
-    def stream(self, method, url, **kwargs):
-        params = kwargs.get("params")
-        if params:
-            self.logger.info("[STREAM] %s %s %s", method, url, params)
-        else:
-            self.logger.info("[STREAM] %s %s", method, url)
-        return super().stream(method, url, **kwargs)
+    @asynccontextmanager
+    async def stream(self, method, url, **kwargs):
+        async with super().stream(method, url, **kwargs) as response:
+            params = kwargs.get("params")
+            if params:
+                url = url + "?" + urlencode(params)
+            self.logger.info("%s %s %s", method, url, response.status_code)
+            self.raise_for_status(response)
+            yield response
 
     async def get(self, url, **kwargs):
         return await self.request("GET", url, **kwargs)
@@ -105,9 +110,9 @@ class Resource:
     """
     Class for a REST resource.
     """
-    def __init__(self, client, path):
+    def __init__(self, client, name):
         self.client = client
-        self.path = "/" + path.strip("/")
+        self.name = name.strip("/")
 
     async def ensure_initialised(self):
         """
@@ -122,8 +127,12 @@ class Resource:
         Returns a (path, params) tuple where the path parameters have interpolated
         and the remaining params should be given as URL parameters.
         """
-        # By default, there are no path parameters
-        return f"{self.path}/{id}" if id else self.path, params
+        if id:
+            parts = self.name.split("/", maxsplit = 1)
+            parts.insert(1, id)
+            return "/" + "/".join(parts), params
+        else:
+            return "/" + self.name, params
 
     def extract_list(self, response):
         """
@@ -211,41 +220,33 @@ class Resource:
         data = self.extract_one(response)
         return self.wrap_instance(data)
 
-    async def _create_or_update(self, update_http_method, id, data, params):
+    async def _create_or_update(self, method, id, data, params):
         """
         Attempts to update the specified instance of the resource with the given data and method.
 
         If it does not exist, a new instance is created with the given data instead.
         """
-        await self.ensure_initialised()
-        path, _ = self.prepare_path(id, **params)
-        data = self.prepare_data(data, id, **params)
-        response = await self.client.request(
-            update_http_method,
-            path,
-            json = data,
-            raise_exceptions = False
-        )
-        if response.is_success:
-            return self.wrap_instance(self.extract_one(response))
-        elif response.status_code == 404:
-            return await self.create(data, **params)
-        else:
-            self.client.raise_for_status(response)
+        try:
+            return await method(id, data, **params)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return await self.create(data, **params)
+            else:
+                raise
 
     async def create_or_replace(self, id, data, **params):
         """
         Attempts to replace the specified instance of the resource with the given data.
         If it does not exist, a new instance is created with the given data instead.
         """
-        return await self._create_or_update("PUT", id, data, params)
+        return await self._create_or_update(self.replace, id, data, params)
 
     async def create_or_patch(self, id, data, **params):
         """
         Attempts to replace the specified instance of the resource with the given data.
         If it does not exist, a new instance is created with the given data instead.
         """
-        return await self._create_or_update("PATCH", id, data, params)
+        return await self._create_or_update(self.patch, id, data, params)
 
     async def delete(self, id, **params):
         """
@@ -253,7 +254,9 @@ class Resource:
         """
         await self.ensure_initialised()
         path, _ = self.prepare_path(id, **params)
-        response = await self.client.delete(path, raise_exceptions = False)
         # Suppress 404s as the desired state has been reached
-        if not response.is_success and response.status_code != 404:
-            self.client.raise_for_status(response)
+        try:
+            await self.client.delete(path)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise

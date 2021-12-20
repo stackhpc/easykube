@@ -4,17 +4,21 @@ import dataclasses
 import json
 import typing
 
+import httpx
+
 from . import rest
 
 
-class ApiError(Exception):
+class ApiError(httpx.HTTPStatusError):
     """
     Exception that is raised when a Kubernetes API error occurs that is in the 4xx range.
     """
-    def __init__(self, status_code, data):
-        self.status_code = status_code
-        self.data = data
-        super().__init__(data.get("message", str(data)))
+    def __init__(self, source):
+        try:
+            message = source.response.json()["message"]
+        except (json.JSONDecodeError, KeyError):
+            message = source.response.text
+        super().__init__(message, request = source.request, response = source.response)
 
 
 @dataclasses.dataclass
@@ -37,6 +41,23 @@ class ResourceSpec:
         """
         return Resource(client, self.api_version, self.name, self.kind, self.namespaced)
 
+    @classmethod
+    def from_crd(cls, crd):
+        """
+        Returns a resource spec for the given CRD definition.
+        """
+        api_group = crd["spec"]["group"]
+        preferred_version = next(
+            version["name"]
+            for version in crd["spec"]["versions"]
+            if version.get("storage", False)
+        )
+        api_version = f"{api_group}/{preferred_version}"
+        name = crd["spec"]["names"]["plural"]
+        kind = crd["spec"]["names"]["kind"]
+        namespaced = crd["spec"]["scope"] == "Namespaced"
+        return cls(api_version, name, kind, namespaced)
+
 
 class Client(rest.Client):
     """
@@ -51,11 +72,11 @@ class Client(rest.Client):
         self.preferred_versions = {}
 
     def raise_for_status(self, response):
-        # For client errors, the response will always be JSON with extra info
-        if response.is_client_error:
-            raise ApiError(response.status_code, response.json())
-        else:
+        # Convert response errors into ApiErrors for better messages
+        try:
             super().raise_for_status(response)
+        except httpx.HTTPStatusError as source:
+            raise ApiError(source)
 
     async def request(self, method, url, **kwargs):
         # For patch requests, set the content-type as merge-patch unless otherwise specified
@@ -106,6 +127,15 @@ class Client(rest.Client):
         namespace = object["metadata"].get("namespace")
         return await resource.create(object, namespace = namespace)
 
+    async def replace_object(self, object):
+        """
+        Replace the given object with the specified state.
+        """
+        resource = await self._resource_for_object(object)
+        name = object["metadata"]["name"]
+        namespace = object["metadata"].get("namespace")
+        return await resource.replace(name, object, namespace = namespace)
+
     async def patch_object(self, object, patch):
         """
         Apply the given patch to the specified object.
@@ -131,7 +161,7 @@ class Client(rest.Client):
         resource = await self._resource_for_object(object)
         name = object["metadata"]["name"]
         namespace = object["metadata"].get("namespace")
-        return await resource.create_or_patch(name, object, namespace = namespace)
+        return await resource.create_or_replace(name, object, namespace = namespace)
 
     @classmethod
     def from_environment(cls, **kwargs):
@@ -230,8 +260,8 @@ class Resource(rest.Resource):
             path_namespace = f"/namespaces/{namespace}"
         else:
             path_namespace = ""
-        path = f"{prefix}/{self.api_version}{path_namespace}/{self.name}"
-        return f"{path}/{id}" if id else path, params
+        path, _ = super().prepare_path(id)
+        return f"{prefix}/{self.api_version}{path_namespace}{path}", params
 
     def extract_list(self, response):
         return response.json()["items"]
@@ -259,6 +289,20 @@ class Resource(rest.Resource):
         return await super().patch(id, data, namespace = namespace)
 
     async def create_or_replace(self, id, data, *, namespace = None):
+        # This is intended to replicate "kubectl apply" type functionality
+        # So we fetch the latest resourceVersion before executing if required
+        resource_version = data.get("metadata", {}).get("resourceVersion")
+        if not resource_version:
+            try:
+                latest = await self.fetch(id)
+            except ApiError as exc:
+                if exc.response.status_code == 404:
+                    return await self.create(data, namespace = namespace)
+                else:
+                    raise
+            else:
+                latest_version = latest["metadata"]["resourceVersion"]
+                data.setdefault("metadata", {})["resourceVersion"] = latest_version
         return await super().create_or_replace(id, data, namespace = namespace)
 
     async def create_or_patch(self, id, data, *, namespace = None):
@@ -274,6 +318,43 @@ class Resource(rest.Resource):
         await self.ensure_initialised()
         path, params = self.prepare_path(**params)
         await self.client.delete(path, params = params)
+
+    async def watch_events(self, path, params, initial_resource_version):
+        """
+        Returns an async iterator of watch events for the given path and params, starting
+        at the given initial resource version.
+        """
+        watch_params = params.copy()
+        watch_params.update({
+            "watch": 1,
+            "resourceVersion": initial_resource_version,
+            "allowWatchBookmarks": "true"
+        })
+        while True:
+            try:
+                stream = self.client.stream("GET", path, params = watch_params, timeout = None)
+                async with stream as response:
+                    async for chunk in response.aiter_bytes():
+                        event = json.loads(chunk)
+                        # Each event contains a resourceVersion, which we track so that we can restart
+                        # the watch if it fails
+                        watch_params.update({
+                            "resourceVersion": event["object"]["metadata"]["resourceVersion"],
+                        })
+                        if event["type"] != "BOOKMARK":
+                            yield event
+            except json.JSONDecodeError:
+                # In the case where an event is not valid JSON, it is likely that the API
+                # server is still healthy but the read has just timed out
+                #
+                # In this case, we should be able to restart the watch from the last known
+                # resource version
+                #
+                # In all other cases, the exception should be allowed to bubble, e.g.:
+                #   * The API server responds with 410 Gone, in which case the watch needs
+                #     to restart from scratch
+                #   * We cannot connect to the API server
+                pass
 
     async def watch_list(self, **params):
         """
@@ -291,16 +372,8 @@ class Resource(rest.Resource):
         async for response in self.client.paginate(path, params = params):
             resource_version = response.json()["metadata"]["resourceVersion"]
             initial_state.extend(self.wrap_instance(i) for i in self.extract_list(response))
-        # Define the async iterator for the watch events
-        async def watch_events():
-            watch_params = params.copy()
-            watch_params.update({ "watch": 1, "resourceVersion": resource_version })
-            stream = self.client.stream("GET", path, params = watch_params, timeout = None)
-            async with stream as response:
-                async for chunk in response.aiter_bytes():
-                    yield json.loads(chunk)
         # Return the (initial state, watch events) tuple
-        return initial_state, watch_events()
+        return initial_state, self.watch_events(path, params, resource_version)
 
     async def watch_one(self, id, *, namespace = None):
         """
