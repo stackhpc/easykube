@@ -377,14 +377,20 @@ class Resource:
         """
         Extracts a single instance from a fetch, create or update response.
         """
-        return response.json()
+        content_type = response.headers.get("content-type")
+        if content_type == "application/json":
+            return response.json()
+        elif content_type == "text/plain":
+            return response.text
+        else:
+            return response.content
 
     def _wrap_instance(self, instance):
         """
         Receives an instance and wraps the instance if required.
         """
         # By default, wrap the instance in a property dict
-        return PropertyDict(instance)
+        return PropertyDict(instance) if isinstance(instance, dict) else instance
 
     def list(self, **params):
         """
