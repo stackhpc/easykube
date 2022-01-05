@@ -455,7 +455,7 @@ class Resource:
             return (yield method(id, data, **params))
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
-                return (yield self._create(data, **params))
+                return (yield self.create(data, **params))
             else:
                 raise
 
@@ -465,7 +465,7 @@ class Resource:
         Attempts to replace the specified instance of the resource with the given data.
         If it does not exist, a new instance is created with the given data instead.
         """
-        return (yield self._create_or_update(self._replace, id, data, params))
+        return (yield self._create_or_update(self.replace, id, data, params))
 
     @flow
     def create_or_patch(self, id, data, **params):
@@ -473,7 +473,7 @@ class Resource:
         Attempts to patch the specified instance of the resource with the given data.
         If it does not exist, a new instance is created with the given data instead.
         """
-        return (yield self._create_or_update(self._patch, id, data, params))
+        return (yield self._create_or_update(self.patch, id, data, params))
 
     @flow
     def delete(self, id, **params):

@@ -379,7 +379,7 @@ class Resource(rest.Resource):
         resource_version = data.get("metadata", {}).get("resourceVersion")
         if not resource_version:
             try:
-                latest = yield self._fetch(id, namespace = namespace)
+                latest = yield self.fetch(id, namespace = namespace)
             except ApiError as exc:
                 if exc.response.status_code == 404:
                     return (yield self.create(data, namespace = namespace))
