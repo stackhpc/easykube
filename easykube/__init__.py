@@ -1,2 +1,2 @@
 from . import resources
-from .client import ApiError, Client, ResourceSpec
+from .client import ApiError, Client

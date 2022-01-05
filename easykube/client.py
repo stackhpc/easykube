@@ -1,4 +1,3 @@
-import asyncio
 import copy
 import dataclasses
 import json
@@ -59,13 +58,13 @@ class ResourceSpec:
         return cls(api_version, name, kind, namespaced)
 
 
-class Client(rest.Client):
+class ClientMixin:
     """
-    REST client for Kubernetes.
+    Mixin defining additional methods for sync and async clients.
     """
-    def __init__(self, default_namespace = "default", **kwargs):
-        self.default_namespace = default_namespace
+    def __init__(self, *, default_namespace = "default", **kwargs):
         super().__init__(**kwargs)
+        self.default_namespace = default_namespace
         # Cache of API version -> API objects
         self.apis = {}
         # Cache of API group -> API version using preferred version
@@ -78,12 +77,12 @@ class Client(rest.Client):
         except httpx.HTTPStatusError as source:
             raise ApiError(source)
 
-    async def request(self, method, url, **kwargs):
+    def build_request(self, method, url, **kwargs):
         # For patch requests, set the content-type as merge-patch unless otherwise specified
         if method.lower() == "patch":
             headers = kwargs.setdefault("headers", {})
             headers.setdefault("Content-Type", "application/merge-patch+json")
-        return await super().request(method, url, **kwargs)
+        return super().build_request(method, url, **kwargs)
 
     def api(self, api_version):
         """
@@ -93,75 +92,94 @@ class Client(rest.Client):
             self.apis[api_version] = Api(self, api_version)
         return self.apis[api_version]
 
-    async def api_preferred_version(self, group):
+    @rest.flow
+    def api_preferred_version(self, group):
         """
         Returns an API object for the given group at the preferred version.
         """
         if group not in self.preferred_versions:
-            response = await self.get(f"/apis/{group}")
+            response = yield self.get(f"/apis/{group}")
             api_version = response.json()["preferredVersion"]["groupVersion"]
             self.preferred_versions[group] = api_version
         return self.api(self.preferred_versions[group])
 
-    async def _resource_for_object(self, object):
+    def _resource_for_object(self, object):
         """
         Returns a resource for the given object.
         """
+        # Get the resource using the api version and kind from the object
         api_version = object["apiVersion"]
         kind = object["kind"]
-        # We need to get the name for the kind
-        api = self.api(api_version)
-        api_resources = await api.resources
-        try:
-            name = next(r["name"] for r in api_resources.values() if r["kind"] == kind)
-        except StopIteration:
-            raise TypeError(f"API '{api_version}' has no resource '{kind}'")
-        else:
-            return api.resource(name)
+        return (yield self.api(api_version).resource(kind))
 
-    async def create_object(self, object):
+    @rest.flow
+    def create_object(self, object):
         """
         Create the given object.
         """
-        resource = await self._resource_for_object(object)
+        resource = yield self._resource_for_object(object)
         namespace = object["metadata"].get("namespace")
-        return await resource.create(object, namespace = namespace)
+        return (yield resource.create(object, namespace = namespace))
 
-    async def replace_object(self, object):
+    @rest.flow
+    def replace_object(self, object):
         """
         Replace the given object with the specified state.
         """
-        resource = await self._resource_for_object(object)
+        resource = yield self._resource_for_object(object)
         name = object["metadata"]["name"]
         namespace = object["metadata"].get("namespace")
-        return await resource.replace(name, object, namespace = namespace)
+        return (yield resource.replace(name, object, namespace = namespace))
 
-    async def patch_object(self, object, patch):
+    @rest.flow
+    def patch_object(self, object, patch):
         """
         Apply the given patch to the specified object.
         """
-        resource = await self._resource_for_object(object)
+        resource = yield self._resource_for_object(object)
         name = object["metadata"]["name"]
         namespace = object["metadata"].get("namespace")
-        return await resource.patch(name, patch, namespace = namespace)
+        return (yield resource.patch(name, patch, namespace = namespace))
 
-    async def delete_object(self, object):
+    @rest.flow
+    def delete_object(self, object):
         """
         Delete the specified object.
         """
-        resource = await self._resource_for_object(object)
+        resource = yield self._resource_for_object(object)
         name = object["metadata"]["name"]
         namespace = object["metadata"].get("namespace")
-        return await resource.delete(name, namespace = namespace)
+        return (yield resource.delete(name, namespace = namespace))
 
-    async def apply_object(self, object):
+    @rest.flow
+    def apply_object(self, object):
         """
         Create or update the given object, equivalent to "kubectl apply".
         """
-        resource = await self._resource_for_object(object)
+        resource = yield self._resource_for_object(object)
         name = object["metadata"]["name"]
         namespace = object["metadata"].get("namespace")
-        return await resource.create_or_replace(name, object, namespace = namespace)
+        return (yield resource.create_or_replace(name, object, namespace = namespace))
+
+
+class SyncClient(ClientMixin, rest.SyncClient):
+    """
+    Sync client for Kubernetes.
+    """
+
+
+class AsyncClient(ClientMixin, rest.AsyncClient):
+    """
+    Async client for Kubernetes.
+    """
+
+
+class Client(rest.Client):
+    """
+    Client for Kubernetes.
+    """
+    __sync_client_class__ = SyncClient
+    __async_client_class__ = AsyncClient
 
     @classmethod
     def from_environment(cls, **kwargs):
@@ -181,68 +199,137 @@ class Api:
     Class for a Kubernetes API.
     """
     def __init__(self, client, api_version):
-        self.client = client
-        self.api_version = api_version
-        # Create a task that will load the resources for the API once
-        self.resources = asyncio.create_task(self._fetch_resources())
+        self._client = client
+        self._api_version = api_version
+        self._resources = None
 
-    async def _fetch_resources(self):
+    @property
+    def api_version(self):
         """
-        Return the resources for the API indexed by name.
+        Returns the API version for the API.
         """
-        prefix = "/apis" if "/" in self.api_version else "/api"
-        response = await self.client.get(f"{prefix}/{self.api_version}")
-        return { r["name"]: r for r in response.json()["resources"] }
+        return self._api_version
 
+    def _ensure_resources(self):
+        """
+        Ensures that the resources have been loaded.
+        """
+        if self._resources is None:
+            prefix = "/apis" if "/" in self._api_version else "/api"
+            response = yield self._client.get(f"{prefix}/{self._api_version}")
+            self._resources = { r["name"]: r for r in response.json()["resources"] }
+        return self._resources
+
+    @rest.flow
     def resource(self, name):
         """
-        Return a resource for the given name.
+        Returns a resource for the given name.
+
+        The given name can be either the plural name, the singular name or the kind.
+        Lookups by plural name will be faster as that is the key that is indexed.
         """
-        return Resource(self.client, self.api_version, name)
+        resources = yield self._ensure_resources()
+        # First try a lookup by plural name
+        try:
+            resource = resources[name]
+        except KeyError:
+            # Then try a lookup by singular name or kind
+            try:
+                resource = next(
+                    r
+                    for r in resources.values()
+                    if r["kind"] == name or r["singularName"] == name
+                )
+            except StopIteration:
+                raise ValueError(f"API '{self._api_version}' has no resource '{name}'")
+        return Resource(
+            self._client,
+            self._api_version,
+            resource["name"],
+            resource["kind"],
+            resource["namespaced"]
+        )
+
+
+class ListResponseIterator(rest.ListResponseIterator):
+    """
+    Iterator for list responses.
+    """
+    def __init__(self, client, resource, params):
+        super().__init__(client, resource, params)
+        self._resource_version = None
+
+    @property
+    def resource_version(self):
+        """
+        The last seen resource version.
+        """
+        return self._resource_version
+
+    def _extract_list(self, response):
+        # Store the resource version from the response as well as returning the data
+        data = response.json()
+        self._resource_version = data["metadata"]["resourceVersion"]
+        return data["items"]
+
+
+class WatchEvents(rest.StreamIterator):
+    """
+    Stream iterator that yields watch events.
+    """
+    def __init__(self, client, path, params, initial_resource_version):
+        self._client = client
+        self._path = path
+        self._params = params.copy()
+        self._params.update({
+            "watch": 1,
+            "resourceVersion": initial_resource_version,
+            "allowWatchBookmarks": "true",
+        })
+
+    def _stream(self):
+        return self._client.stream("GET", self._path, params = self._params, timeout = None)
+
+    def _process_chunk(self, chunk):
+        event = json.loads(chunk)
+        # Each event contains a resourceVersion, which we track so that we can restart
+        # the watch from that version if it fails
+        self._params["resourceVersion"] = event["object"]["metadata"]["resourceVersion"]
+        # Bookmark events are just for us to save a resource version
+        # They should not be emitted
+        if event["type"] == "BOOKMARK":
+            raise self.SuppressItem
+        else:
+            return event
+
+    def _should_resume(self, exception):
+        # In the case where an event is not valid JSON, it is likely that the API
+        # server is still healthy but the read has just timed out
+        #
+        # In this case, we should be able to restart the watch from the last known
+        # resource version
+        #
+        # In all other cases, the exception should be allowed to bubble, e.g.:
+        #   * The API server responds with 410 Gone, in which case the watch needs
+        #     to restart from scratch
+        #   * We cannot connect to the API server
+        return not exception or isinstance(exception, json.JSONDecodeError)
 
 
 class Resource(rest.Resource):
     """
     Class for Kubernetes REST resources.
     """
-    def __init__(self, client, api_version, name, kind = None, namespaced = None):
-        self.client = client
-        # If a falsely API version is given, assume the core API is intended
-        self.api_version = api_version or "v1"
-        self.name = name
-        self.kind = kind
-        self.namespaced = namespaced
+    __iterator_class__ = ListResponseIterator
 
-    async def ensure_initialised(self):
-        """
-        Ensures that the resource is fully initialised including any async operations.
-        """
-        # For the core API, the given API version should be "v1"
-        # For any other API, the given API version will be "<group>" or "<group>/<version>"
-        # We only need to query the preferred version if we were given a group without a version
-        api_version_is_complete = self.api_version == "v1" or "/" in self.api_version
-        # If we already have all the information we need, there is nothing to do
-        if api_version_is_complete and self.kind is not None and self.namespaced is not None:
-            return
-        # Load the API object for our API version
-        if api_version_is_complete:
-            api = self.client.api(self.api_version)
-        else:
-            api = await self.client.api_preferred_version(self.api_version)
-        # Update the stored API version with the fully discovered one
-        self.api_version = api.api_version
-        # Get the kind and whether the resource is namespaced from the API resources
-        api_resources = await api.resources
-        try:
-            resource = api_resources[self.name]
-        except KeyError:
-            raise TypeError(f"API '{self.api_version}' has no resource '{self.name}'")
-        else:
-            self.kind = resource["kind"]
-            self.namespaced = resource["namespaced"]
+    def __init__(self, client, api_version, name, kind, namespaced):
+        super().__init__(client, name)
+        self._api_version = api_version
+        self._kind = kind
+        self._namespaced = namespaced
 
-    def prepare_path(self, id = None, **params):
-        namespace = params.pop("namespace", None) or self.client.default_namespace
+    def _prepare_path(self, id = None, params = None):
+        namespace = params.pop("namespace", None) or self._client.default_namespace
         all_namespaces = params.pop("all_namespaces", False)
         if "labels" in params:
             params["labelSelector"] = ",".join(
@@ -255,127 +342,94 @@ class Resource(rest.Resource):
                 for k, v in params.pop("fields").items()
             )
         # Begin with either /api or /apis depending whether the api version is the core API
-        prefix = "/apis" if "/" in self.api_version else "/api"
-        if self.namespaced and not all_namespaces:
+        prefix = "/apis" if "/" in self._api_version else "/api"
+        if self._namespaced and not all_namespaces:
             path_namespace = f"/namespaces/{namespace}"
         else:
             path_namespace = ""
-        path, _ = super().prepare_path(id)
-        return f"{prefix}/{self.api_version}{path_namespace}{path}", params
+        path, _ = super()._prepare_path(id)
+        return f"{prefix}/{self._api_version}{path_namespace}{path}", params
 
-    def extract_list(self, response):
-        return response.json()["items"]
-
-    def prepare_data(self, data, id = None, **params):
+    def _prepare_data(self, data, id = None, params = None):
         data = copy.deepcopy(data)
         # Update the data with the known api version and kind
-        data.setdefault("apiVersion", self.api_version)
-        data.setdefault("kind", self.kind)
+        data.setdefault("apiVersion", self._api_version)
+        data.setdefault("kind", self._kind)
         # Set the name in metadata to the given id
         if id:
             data.setdefault("metadata", {}).update(name = id)
         return data
 
-    async def create(self, data, *, namespace = None):
-        return await super().create(data, namespace = namespace)
+    def create(self, data, *, namespace = None):
+        return super().create(data, namespace = namespace)
 
-    async def fetch(self, id, *, namespace = None):
-        return await super().fetch(id, namespace = namespace)
+    def fetch(self, id, *, namespace = None):
+        return super().fetch(id, namespace = namespace)
 
-    async def replace(self, id, data, *, namespace = None):
-        return await super().replace(id, data, namespace = namespace)
+    def replace(self, id, data, *, namespace = None):
+        return super().replace(id, data, namespace = namespace)
 
-    async def patch(self, id, data, *, namespace = None):
-        return await super().patch(id, data, namespace = namespace)
+    def patch(self, id, data, *, namespace = None):
+        return super().patch(id, data, namespace = namespace)
 
-    async def create_or_replace(self, id, data, *, namespace = None):
-        # This is intended to replicate "kubectl apply" type functionality
+    @rest.flow
+    def create_or_replace(self, id, data, *, namespace = None):
+        # This is intended to replicate "kubectl apply"
         # So we fetch the latest resourceVersion before executing if required
         resource_version = data.get("metadata", {}).get("resourceVersion")
         if not resource_version:
             try:
-                latest = await self.fetch(id)
+                latest = yield self._fetch(id, namespace = namespace)
             except ApiError as exc:
                 if exc.response.status_code == 404:
-                    return await self.create(data, namespace = namespace)
+                    return (yield self.create(data, namespace = namespace))
                 else:
                     raise
             else:
                 latest_version = latest["metadata"]["resourceVersion"]
                 data.setdefault("metadata", {})["resourceVersion"] = latest_version
-        return await super().create_or_replace(id, data, namespace = namespace)
+        return (yield self.replace(id, data, namespace = namespace))
 
-    async def create_or_patch(self, id, data, *, namespace = None):
-        return await super().create_or_patch(id, data, namespace = namespace)
+    def create_or_patch(self, id, data, *, namespace = None):
+        return super().create_or_patch(id, data, namespace = namespace)
 
-    async def delete(self, id, *, namespace = None):
-        return await super().delete(id, namespace = namespace)
+    def delete(self, id, *, namespace = None):
+        return super().delete(id, namespace = namespace)
 
-    async def delete_all(self, **params):
+    @rest.flow
+    def delete_all(self, **params):
         """
         Deletes a collection of resources.
         """
-        await self.ensure_initialised()
-        path, params = self.prepare_path(**params)
-        await self.client.delete(path, params = params)
+        yield self._ensure_initialised()
+        path, params = self._prepare_path(params = params)
+        yield self._client.delete(path, params = params)
 
-    async def watch_events(self, path, params, initial_resource_version):
+    @rest.flow
+    def watch_list(self, **params):
         """
-        Returns an async iterator of watch events for the given path and params, starting
-        at the given initial resource version.
+        Watches a set of resource instances, as specified by the given parameters, for changes.
+
+        Returns a tuple of (initial state, watch events).
         """
-        watch_params = params.copy()
-        watch_params.update({
-            "watch": 1,
-            "resourceVersion": initial_resource_version,
-            "allowWatchBookmarks": "true"
-        })
+        yield self._ensure_initialised()
+        # Accumulate the inital state by looping through the list iterator
+        iterator = self.list(**params)
+        initial_state = []
         while True:
             try:
-                stream = self.client.stream("GET", path, params = watch_params, timeout = None)
-                async with stream as response:
-                    async for chunk in response.aiter_bytes():
-                        event = json.loads(chunk)
-                        # Each event contains a resourceVersion, which we track so that we can restart
-                        # the watch if it fails
-                        watch_params.update({
-                            "resourceVersion": event["object"]["metadata"]["resourceVersion"],
-                        })
-                        if event["type"] != "BOOKMARK":
-                            yield event
-            except json.JSONDecodeError:
-                # In the case where an event is not valid JSON, it is likely that the API
-                # server is still healthy but the read has just timed out
-                #
-                # In this case, we should be able to restart the watch from the last known
-                # resource version
-                #
-                # In all other cases, the exception should be allowed to bubble, e.g.:
-                #   * The API server responds with 410 Gone, in which case the watch needs
-                #     to restart from scratch
-                #   * We cannot connect to the API server
-                pass
+                next_item = yield iterator._next_item()
+            except ListResponseIterator.StopIteration:
+                break
+            else:
+                initial_state.append(next_item)
+        # Get the path to use for the watch
+        path, params = self._prepare_path(params = params)
+        # Use the final resource version from the iterator for the watch
+        return initial_state, WatchEvents(self._client, path, params, iterator.resource_version)
 
-    async def watch_list(self, **params):
-        """
-        Watches the list of resource instances for changes.
-
-        Returns a tuple of (initial state, async iterator of watch events).
-        """
-        # This behaviour mimics "kubectl get <resource> -w"
-        await self.ensure_initialised()
-        path, params = self.prepare_path(**params)
-        # Get the initial state and the resource version using the same logic as list
-        # We can't actually use list because we need the full response, not just the items
-        initial_state = []
-        resource_version = None
-        async for response in self.client.paginate(path, params = params):
-            resource_version = response.json()["metadata"]["resourceVersion"]
-            initial_state.extend(self.wrap_instance(i) for i in self.extract_list(response))
-        # Return the (initial state, watch events) tuple
-        return initial_state, self.watch_events(path, params, resource_version)
-
-    async def watch_one(self, id, *, namespace = None):
+    @rest.flow
+    def watch_one(self, id, *, namespace = None):
         """
         Watches a single resource instance for changes.
 
@@ -383,7 +437,7 @@ class Resource(rest.Resource):
         """
         # Just watch the list but with a field selector
         # We also extract the single object from the initial state
-        initial_state, events = await self.watch_list(
+        initial_state, events = yield self._watch_list(
             fields = { "metadata.name": id },
             namespace = namespace
         )
