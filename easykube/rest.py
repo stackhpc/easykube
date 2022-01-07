@@ -1,8 +1,12 @@
 import functools
 import inspect
 import json
+import logging
 
 import httpx
+
+
+logger = logging.getLogger(__name__)
 
 
 class PropertyDict(dict):
@@ -27,6 +31,14 @@ class ClientMixin:
     """
     Mixin class containing common methods for sync and async clients.
     """
+    def log_response(self, response):
+        logger.info(
+            "API request: \"%s %s\" %s",
+            response.request.method,
+            response.request.url,
+            response.status_code
+        )
+
     def raise_for_status(self, response):
         """
         Raise the relevant exception for the response, if required.
@@ -40,6 +52,7 @@ class SyncClient(ClientMixin, httpx.Client):
     """
     def send(self, request, **kwargs):
         response = super().send(request, **kwargs)
+        self.log_response(response)
         self.raise_for_status(response)
         return response
 
@@ -78,6 +91,7 @@ class AsyncClient(ClientMixin, httpx.AsyncClient):
     """
     async def send(self, request, **kwargs):
         response = await super().send(request, **kwargs)
+        self.log_response(response)
         self.raise_for_status(response)
         return response
 

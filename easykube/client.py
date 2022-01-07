@@ -14,10 +14,16 @@ class ApiError(httpx.HTTPStatusError):
     """
     def __init__(self, source):
         try:
-            message = source.response.json()["message"]
+            data = source.response.json()
         except (json.JSONDecodeError, KeyError):
             message = source.response.text
+            reason = None
+        else:
+            message = data["message"]
+            reason = data.get("reason")
         super().__init__(message, request = source.request, response = source.response)
+        self.status_code = source.response.status_code
+        self.reason = reason
 
 
 @dataclasses.dataclass
@@ -162,25 +168,10 @@ class ClientMixin:
         return (yield resource.create_or_replace(name, object, namespace = namespace))
 
 
-class SyncClient(ClientMixin, rest.SyncClient):
+class FromEnvironmentMixin:
     """
-    Sync client for Kubernetes.
+    Mixin adding the from_environment class method to each client.
     """
-
-
-class AsyncClient(ClientMixin, rest.AsyncClient):
-    """
-    Async client for Kubernetes.
-    """
-
-
-class Client(rest.Client):
-    """
-    Client for Kubernetes.
-    """
-    __sync_client_class__ = SyncClient
-    __async_client_class__ = AsyncClient
-
     @classmethod
     def from_environment(cls, **kwargs):
         """
@@ -192,6 +183,26 @@ class Client(rest.Client):
         """
         kwargs.setdefault("base_url", "http://127.0.0.1:8001")
         return cls(**kwargs)
+
+
+class SyncClient(ClientMixin, FromEnvironmentMixin, rest.SyncClient):
+    """
+    Sync client for Kubernetes.
+    """
+
+
+class AsyncClient(ClientMixin, FromEnvironmentMixin, rest.AsyncClient):
+    """
+    Async client for Kubernetes.
+    """
+
+
+class Client(FromEnvironmentMixin, rest.Client):
+    """
+    Client for Kubernetes.
+    """
+    __sync_client_class__ = SyncClient
+    __async_client_class__ = AsyncClient
 
 
 class Api:
@@ -437,7 +448,7 @@ class Resource(rest.Resource):
         """
         # Just watch the list but with a field selector
         # We also extract the single object from the initial state
-        initial_state, events = yield self._watch_list(
+        initial_state, events = yield self.watch_list(
             fields = { "metadata.name": id },
             namespace = namespace
         )
