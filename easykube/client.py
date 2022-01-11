@@ -86,8 +86,9 @@ class ClientMixin:
     def build_request(self, method, url, **kwargs):
         # For patch requests, set the content-type as merge-patch unless otherwise specified
         if method.lower() == "patch":
-            headers = kwargs.setdefault("headers", {})
+            headers = kwargs.get("headers") or {}
             headers.setdefault("Content-Type", "application/merge-patch+json")
+            kwargs["headers"] = headers
         return super().build_request(method, url, **kwargs)
 
     def api(self, api_version):
