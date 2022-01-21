@@ -1,6 +1,7 @@
 import copy
 import dataclasses
 import json
+import os
 import typing
 
 import httpx
@@ -178,11 +179,9 @@ class FromEnvironmentMixin:
         """
         Return a client created from the available information in the environment.
 
-        If running in cluster, this will use the details of the service account used by the pod.
-
-        If not running in a cluster, it relies on "kubectl proxy" to be running.
+        Currently, this relies on "kubectl proxy" to be running.
         """
-        kwargs.setdefault("base_url", "http://127.0.0.1:8001")
+        kwargs.setdefault("base_url", os.environ.get("KUBE_PROXY_URL", "http://127.0.0.1:8001"))
         return cls(**kwargs)
 
 
