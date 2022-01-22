@@ -471,6 +471,8 @@ class Resource:
         Flow that attempts to update an instance using the given data and method. If the
         instance does not exist, it is created with the given data.
         """
+        # Always prepare the data with the id, even for a create
+        data = self._prepare_data(data, id, params)
         try:
             return (yield method(id, data, **params))
         except httpx.HTTPStatusError as exc:
