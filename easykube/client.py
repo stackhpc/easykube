@@ -314,17 +314,20 @@ class WatchEvents(rest.StreamIterator):
             return event
 
     def _should_resume(self, exception):
-        # In the case where an event is not valid JSON, it is likely that the API
-        # server is still healthy but the read has just timed out
+        # In the case where an event is not valid JSON or we get a RemoteProtocolError,
+        # it is likely that the API server is still healthy but the read has just timed out
         #
-        # In this case, we should be able to restart the watch from the last known
-        # resource version
+        # In this case, we should be able to restart the watch from the last known version
         #
         # In all other cases, the exception should be allowed to bubble, e.g.:
         #   * The API server responds with 410 Gone, in which case the watch needs
         #     to restart from scratch
         #   * We cannot connect to the API server
-        return not exception or isinstance(exception, json.JSONDecodeError)
+        return (
+            not exception or
+            isinstance(exception, json.JSONDecodeError) or
+            isinstance(exception, httpx.RemoteProtocolError)
+        )
 
 
 class Resource(rest.Resource):
