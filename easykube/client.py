@@ -330,6 +330,12 @@ class WatchEvents(rest.StreamIterator):
         )
 
 
+#: Sentinel object indicating that the presence of a label is required with any value
+PRESENT = object()
+#: Sentinel object indicating that a label must not be present
+ABSENT = object()
+
+
 class Resource(rest.Resource):
     """
     Class for Kubernetes REST resources.
@@ -346,15 +352,33 @@ class Resource(rest.Resource):
         namespace = params.pop("namespace", None) or self._client.default_namespace
         all_namespaces = params.pop("all_namespaces", False)
         if "labels" in params:
-            params["labelSelector"] = ",".join(
-                f"{k}={v}"
-                for k, v in params.pop("labels").items()
-            )
+            # Add the selectors for the labels to any explicit label selector
+            # This allows the use of set selectors with the labels keyword
+            if "labelSelector" in params:
+                label_selectors = [params["labelSelector"]]
+            else:
+                label_selectors = []
+            for k, v in params.pop("labels").items():
+                if v is PRESENT:
+                    label_selectors.append(k)
+                elif v is ABSENT:
+                    label_selectors.append(f"!{k}")
+                elif isinstance(v, (list, tuple)):
+                    values_text = v.join(",")
+                    label_selectors.append(f"{k} in ({values_text})")
+                else:
+                    label_selectors.append(f"{k}={v}")
+            params["labelSelector"] = ",".join(label_selectors)
         if "fields" in params:
-            params["fieldSelector"] = ",".join(
+            if "fieldSelector" in params:
+                field_selectors = [params["fieldSelector"]]
+            else:
+                field_selectors = []
+            field_selectors.extend(
                 f"{k}={v}"
                 for k, v in params.pop("fields").items()
             )
+            params["fieldSelector"] = ",".join(field_selectors)
         # Begin with either /api or /apis depending whether the api version is the core API
         prefix = "/apis" if "/" in self._api_version else "/api"
         if self._namespaced and not all_namespaces:
