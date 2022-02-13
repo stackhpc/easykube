@@ -1,10 +1,10 @@
-from . import resources
-from .client import (
-    ApiError,
-    Client,
-    SyncClient,
-    AsyncClient,
-    ResourceSpec,
+from .kubernetes import (
     PRESENT,
-    ABSENT
+    ABSENT,
+    ApiError,
+    AsyncClient,
+    Configuration,
+    ResourceSpec,
+    SyncClient,
+    resources
 )
