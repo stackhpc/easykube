@@ -133,7 +133,7 @@ class Configuration:
             raise ConfigurationError("Could not read service account token")
         else:
             kwargs.setdefault("headers", {}).setdefault("authorization", f"bearer {token}")
-
+        return cls(**kwargs)
 
     @classmethod
     def from_environment(cls, **kwargs):
