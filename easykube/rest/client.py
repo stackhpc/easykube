@@ -1,3 +1,4 @@
+import json
 import logging
 
 import httpx
@@ -12,6 +13,21 @@ class BaseClient(Flowable):
     """
     Base class for sync and async REST clients.
     """
+    def __init__(self, *, json_encoder = None, **kwargs):
+        super().__init__(**kwargs)
+        self._json_encoder = json_encoder
+
+    @flow
+    def request(self, method, url, **kwargs):
+        """
+        Builds and sends a request, respecting any custom JSON encoder.
+        """
+        content = kwargs.get("content")
+        json_obj = kwargs.pop("json", None)
+        if content is None and json_obj is not None:
+            kwargs["content"] = json.dumps(json_obj, default = self._json_encoder)
+        return (yield super().request(method, url, **kwargs))
+
     @flow
     def send(self, request, **kwargs):
         """
