@@ -76,15 +76,18 @@ class Resource(rest.Resource):
         return data
 
     def create(self, data, *, namespace = None):
+        namespace = namespace or data.get("metadata", {}).get("namespace")
         return super().create(data, namespace = namespace)
 
     def fetch(self, id, *, namespace = None):
         return super().fetch(id, namespace = namespace)
 
     def replace(self, id, data, *, namespace = None):
+        namespace = namespace or data.get("metadata", {}).get("namespace")
         return super().replace(id, data, namespace = namespace)
 
     def patch(self, id, data, *, namespace = None):
+        namespace = namespace or data.get("metadata", {}).get("namespace")
         return super().patch(id, data, namespace = namespace)
 
     @flow
