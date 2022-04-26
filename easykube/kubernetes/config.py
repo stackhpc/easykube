@@ -73,12 +73,11 @@ class Configuration:
         return SyncClient(**merged)
 
     @classmethod
-    def from_kubeconfig(cls, path, **kwargs):
+    def from_kubeconfig_data(cls, data, **kwargs):
         """
-        Return a configuration for the given kubeconfig file.
+        Return a configuration for the given kubeconfig data, which can be bytes or str.
         """
-        with pathlib.Path(path).open() as fh:
-            kubeconfig = yaml.safe_load(fh)
+        kubeconfig = yaml.safe_load(data)
         context = next(
             c["context"]
             for c in kubeconfig["contexts"]
@@ -109,6 +108,15 @@ class Configuration:
         else:
             raise ConfigurationError("Authentication method not supported")
         return cls(**kwargs)
+
+    @classmethod
+    def from_kubeconfig(cls, path, **kwargs):
+        """
+        Return a configuration for the given kubeconfig file.
+        """
+        with pathlib.Path(path).open() as fh:
+            data = fh.read()
+        return cls.from_kubeconfig_data(data, **kwargs)
 
     @classmethod
     def from_serviceaccount(cls, **kwargs):
