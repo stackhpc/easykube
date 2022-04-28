@@ -11,8 +11,8 @@ class ApiError(httpx.HTTPStatusError):
         try:
             data = source.response.json()
         except (json.JSONDecodeError, KeyError):
-            message = source.response.text
-            reason = None
+            message = f"{source.response.status_code} {source.response.reason_phrase}"
+            reason = source.response.text
         else:
             message = data["message"]
             reason = data.get("reason")

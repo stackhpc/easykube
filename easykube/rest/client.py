@@ -35,7 +35,7 @@ class BaseClient(Flowable):
         """
         response = yield super().send(request, **kwargs)
         self.log_response(response)
-        self.raise_for_status(response)
+        yield self.raise_for_status(response)
         return response
 
     def log_response(self, response):
@@ -49,11 +49,20 @@ class BaseClient(Flowable):
             response.status_code
         )
 
+    @flow
     def raise_for_status(self, response):
         """
         Raise the relevant exception for the response, if required.
         """
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # Make sure that the response is read while inside any required context managers
+            try:
+                yield exc.response.aread()
+            except RuntimeError:
+                yield exc.response.read()
+            raise exc
 
 
 class SyncClient(BaseClient, httpx.Client):

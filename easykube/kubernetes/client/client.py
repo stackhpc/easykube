@@ -19,10 +19,11 @@ class BaseClient:
         # Cache of API group -> API version using preferred version
         self.preferred_versions = {}
 
+    @flow
     def raise_for_status(self, response):
         # Convert response errors into ApiErrors for better messages
         try:
-            super().raise_for_status(response)
+            yield super().raise_for_status(response)
         except httpx.HTTPStatusError as source:
             raise ApiError(source)
 

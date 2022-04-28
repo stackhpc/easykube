@@ -84,5 +84,8 @@ def flow(method):
     @functools.wraps(method)
     def wrapper(flowable, *args, **kwargs):
         gen = method(flowable, *args, **kwargs)
-        return flowable.get_flow_executor().execute_flow(gen)
+        if inspect.isgenerator(gen):
+            return flowable.get_flow_executor().execute_flow(gen)
+        else:
+            return gen
     return wrapper

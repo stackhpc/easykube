@@ -91,6 +91,21 @@ class Resource(rest.Resource):
         return super().patch(id, data, namespace = namespace)
 
     @flow
+    def json_patch(self, id, data, *, namespace = None):
+        """
+        Patches the specified instance with the given data, treated as a JSON Patch.
+        """
+        yield self._ensure_initialised()
+        path, params = self._prepare_path(id, { "namespace": namespace })
+        response = yield self._client.patch(
+            path,
+            json = data,
+            params = params,
+            headers = { "Content-Type": "application/json-patch+json" }
+        )
+        return self._wrap_instance(self._extract_one(response))
+
+    @flow
     def create_or_replace(self, id, data, *, namespace = None):
         # This is intended to replicate "kubectl apply"
         # So we fetch the latest resourceVersion before executing if required

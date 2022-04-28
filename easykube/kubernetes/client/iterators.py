@@ -48,7 +48,11 @@ class WatchEvents(rest.TextStreamIterator):
         event = json.loads(chunk)
         # Each event contains a resourceVersion, which we track so that we can restart
         # the watch from that version if it fails
-        self._params["resourceVersion"] = event["object"]["metadata"]["resourceVersion"]
+        try:
+            self._params["resourceVersion"] = event["object"]["metadata"]["resourceVersion"]
+        except KeyError:
+            print(json.dumps(event, indent = 4))
+            raise
         # Bookmark events are just for us to save a resource version
         # They should not be emitted
         if event["type"] == "BOOKMARK":
