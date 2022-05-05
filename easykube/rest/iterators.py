@@ -1,3 +1,4 @@
+import contextlib
 import json
 import logging
 
@@ -104,13 +105,53 @@ class StreamIterator:
         self._client = client
         self._method = method
         self._url = url
-        self._kwargs = kwargs
+        # Split the given kwargs into request and send kwargs
+        self._send_kwargs = {}
+        if "auth" in kwargs:
+            self._send_kwargs["auth"] = kwargs.pop("auth")
+        if "follow_redirects" in kwargs:
+            self._send_kwargs["follow_redirects"] = kwargs.pop("follow_redirects")
+        self._request_kwargs = kwargs
+        # Initially, there is no active response
+        self._response = None
 
-    def _stream(self):
+    def _request(self):
         """
-        Returns the stream for the iterator.
+        Returns the request for the iterator.
         """
-        return self._client.stream(self._method, self._url, **self._kwargs)
+        return self._client.build_request(self._method, self._url, **self._request_kwargs)
+
+    @contextlib.contextmanager
+    def _send(self):
+        """
+        Context manager that synchronously sends a request and yields a response, ensuring
+        that the current response is updated.
+        """
+        self._response = self._client.send(
+            self._request(),
+            stream = True,
+            **self._send_kwargs
+        )
+        try:
+            yield self._response
+        finally:
+            self.close()
+
+    @contextlib.asynccontextmanager
+    async def _send_async(self):
+        """
+        Context manager that asynchronously sends a request and yields a response, ensuring
+        that the current response is updated.
+        """
+        self._response = await self._client.send(
+            self._request(),
+            stream = True,
+            **self._send_kwargs
+        )
+        try:
+            yield self._response
+        finally:
+            await self.aclose()
 
     def _chunk_iterator(self, response):
         """
@@ -146,7 +187,7 @@ class StreamIterator:
     def __iter__(self):
         while True:
             try:
-                with self._stream() as response:
+                with self._send() as response:
                     for chunk in self._chunk_iterator(response):
                         try:
                             yield self._process_chunk(chunk)
@@ -162,7 +203,7 @@ class StreamIterator:
     async def __aiter__(self):
         while True:
             try:
-                async with self._stream() as response:
+                async with self._send_async() as response:
                     async for chunk in self._async_chunk_iterator(response):
                         try:
                             yield self._process_chunk(chunk)
@@ -174,6 +215,28 @@ class StreamIterator:
             else:
                 if not self._should_resume(None):
                     break
+
+    def close(self):
+        if self._response:
+            self._response.close()
+            self._response = None
+
+    async def aclose(self):
+        if self._response:
+            await self._response.aclose()
+            self._response = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        await self.aclose()
 
 
 class ByteStreamIterator(StreamIterator):
