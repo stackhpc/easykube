@@ -13,7 +13,7 @@ class BaseClient(Flowable):
     """
     Base class for sync and async REST clients.
     """
-    def __init__(self, *, json_encoder = None, **kwargs):
+    def __init__(self, /, json_encoder = None, **kwargs):
         super().__init__(**kwargs)
         self._json_encoder = json_encoder
 

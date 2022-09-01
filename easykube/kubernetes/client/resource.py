@@ -75,23 +75,23 @@ class Resource(rest.Resource):
             data.setdefault("metadata", {}).update(name = id)
         return data
 
-    def create(self, data, *, namespace = None):
+    def create(self, data, /, namespace = None):
         namespace = namespace or data.get("metadata", {}).get("namespace")
         return super().create(data, namespace = namespace)
 
-    def fetch(self, id, *, namespace = None):
+    def fetch(self, id, /, namespace = None):
         return super().fetch(id, namespace = namespace)
 
-    def replace(self, id, data, *, namespace = None):
+    def replace(self, id, data, /, namespace = None):
         namespace = namespace or data.get("metadata", {}).get("namespace")
         return super().replace(id, data, namespace = namespace)
 
-    def patch(self, id, data, *, namespace = None):
+    def patch(self, id, data, /, namespace = None):
         namespace = namespace or data.get("metadata", {}).get("namespace")
         return super().patch(id, data, namespace = namespace)
 
     @flow
-    def json_patch(self, id, data, *, namespace = None):
+    def json_patch(self, id, data, /, namespace = None):
         """
         Patches the specified instance with the given data, treated as a JSON Patch.
         """
@@ -106,7 +106,31 @@ class Resource(rest.Resource):
         return self._wrap_instance(self._extract_one(response))
 
     @flow
-    def create_or_replace(self, id, data, *, namespace = None):
+    def server_side_apply(self, id, data, /, field_manager = None, namespace = None):
+        """
+        Uses server-side apply to create or update the specified object.
+
+        See https://kubernetes.io/docs/reference/using-api/server-side-apply/.
+        """
+        field_manager = field_manager or self._client.default_field_manager
+        namespace = namespace or data.get("metadata", {}).get("namespace")
+        yield self._ensure_initialised()
+        path, params = self._prepare_path(
+            id,
+            { "namespace": namespace, "fieldManager": field_manager }
+        )
+        data = self._prepare_data(data, id, params)
+        response = yield self._client.patch(
+            path,
+            json = data,
+            params = params,
+            # Use the special server-side apply content type
+            headers = { "Content-Type": "application/apply-patch+yaml" }
+        )
+        return self._wrap_instance(self._extract_one(response))
+
+    @flow
+    def create_or_replace(self, id, data, /, namespace = None):
         # This is intended to replicate "kubectl apply"
         # So we fetch the latest resourceVersion before executing if required
         resource_version = data.get("metadata", {}).get("resourceVersion")
@@ -123,10 +147,10 @@ class Resource(rest.Resource):
                 data.setdefault("metadata", {})["resourceVersion"] = latest_version
         return (yield self.replace(id, data, namespace = namespace))
 
-    def create_or_patch(self, id, data, *, namespace = None):
+    def create_or_patch(self, id, data, /, namespace = None):
         return super().create_or_patch(id, data, namespace = namespace)
 
-    def delete(self, id, *, namespace = None):
+    def delete(self, id, /, namespace = None):
         return super().delete(id, namespace = namespace)
 
     @flow
@@ -162,7 +186,7 @@ class Resource(rest.Resource):
         return initial_state, WatchEvents(self._client, path, params, iterator.resource_version)
 
     @flow
-    def watch_one(self, id, *, namespace = None):
+    def watch_one(self, id, /, namespace = None):
         """
         Watches a single resource instance for changes.
 

@@ -246,7 +246,7 @@ class ByteStreamIterator(StreamIterator):
     Chunks correspond to fixed-size chunks of a byte-stream, and are received by
     _process_chunk as bytes.
     """
-    def __init__(self, client, method, url, *, chunk_size = None, **kwargs):
+    def __init__(self, client, method, url, /, chunk_size = None, **kwargs):
         super().__init__(client, method, url, **kwargs)
         self._chunk_size = chunk_size
 

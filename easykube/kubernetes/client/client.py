@@ -11,8 +11,16 @@ class BaseClient:
     """
     Base class for sync and async clients.
     """
-    def __init__(self, *, default_namespace = "default", **kwargs):
+    def __init__(
+        self,
+        /,
+        # This is the name of the field manager for server-side apply
+        default_field_manager,
+        default_namespace = "default",
+        **kwargs
+    ):
         super().__init__(**kwargs)
+        self.default_field_manager = default_field_manager
         self.default_namespace = default_namespace
         # Cache of API version -> API objects
         self.apis = {}
@@ -103,7 +111,26 @@ class BaseClient:
         return (yield resource.delete(name, namespace = namespace))
 
     @flow
-    def apply_object(self, object):
+    def apply_object(self, object, /, field_manager = None):
+        """
+        Applies the given object using server-side apply.
+
+        See https://kubernetes.io/docs/reference/using-api/server-side-apply/.
+        """
+        resource = yield self._resource_for_object(object)
+        name = object["metadata"]["name"]
+        namespace = object["metadata"].get("namespace")
+        return (
+            yield resource.server_side_apply(
+                name,
+                object,
+                field_manager = field_manager,
+                namespace = namespace
+            )
+        )
+
+    @flow
+    def client_side_apply_object(self, object):
         """
         Create or update the given object, equivalent to "kubectl apply".
         """
