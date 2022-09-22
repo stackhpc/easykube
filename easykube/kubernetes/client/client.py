@@ -111,7 +111,7 @@ class BaseClient:
         return (yield resource.delete(name, namespace = namespace))
 
     @flow
-    def apply_object(self, object, /, field_manager = None):
+    def apply_object(self, object, /, field_manager = None, force = False):
         """
         Applies the given object using server-side apply.
 
@@ -125,7 +125,8 @@ class BaseClient:
                 name,
                 object,
                 field_manager = field_manager,
-                namespace = namespace
+                namespace = namespace,
+                force = force
             )
         )
 

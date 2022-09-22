@@ -106,7 +106,15 @@ class Resource(rest.Resource):
         return self._wrap_instance(self._extract_one(response))
 
     @flow
-    def server_side_apply(self, id, data, /, field_manager = None, namespace = None):
+    def server_side_apply(
+        self,
+        id,
+        data,
+        /,
+        field_manager = None,
+        namespace = None,
+        force = False
+    ):
         """
         Uses server-side apply to create or update the specified object.
 
@@ -115,10 +123,10 @@ class Resource(rest.Resource):
         field_manager = field_manager or self._client.default_field_manager
         namespace = namespace or data.get("metadata", {}).get("namespace")
         yield self._ensure_initialised()
-        path, params = self._prepare_path(
-            id,
-            { "namespace": namespace, "fieldManager": field_manager }
-        )
+        params = { "namespace": namespace, "fieldManager": field_manager }
+        if force:
+            params["force"] = "true"
+        path, params = self._prepare_path(id, params)
         data = self._prepare_data(data, id, params)
         response = yield self._client.patch(
             path,
