@@ -103,7 +103,7 @@ class Resource(Flowable):
         does not exist.
         """
         try:
-            return (yield self.list(**params)._next())
+            return (yield self.list(**params)._next_item())
         except ListResponseIterator.StopIteration:
             return None
 
