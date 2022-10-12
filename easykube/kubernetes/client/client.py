@@ -15,7 +15,7 @@ class BaseClient:
         self,
         /,
         # This is the name of the field manager for server-side apply
-        default_field_manager,
+        default_field_manager = "easykube",
         default_namespace = "default",
         **kwargs
     ):
