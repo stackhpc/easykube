@@ -175,6 +175,8 @@ class Resource(rest.Resource):
         propagation_policy = DeletePropagationPolicy.BACKGROUND,
         namespace = None
     ):
+        if not isinstance(propagation_policy, DeletePropagationPolicy):
+            propagation_policy = DeletePropagationPolicy(propagation_policy)
         return super().delete(
             id,
             {
