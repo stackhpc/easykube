@@ -182,14 +182,14 @@ class Resource(Flowable):
         return (yield self._create_or_update(self.patch, id, data, params))
 
     @flow
-    def delete(self, id, **params):
+    def delete(self, id, data = None, **params):
         """
         Delete the specified instance.
         """
         yield self._ensure_initialised()
         path, params = self._prepare_path(id, params)
         try:
-            yield self._client.delete(path, params = params)
+            yield self._client.delete(path, json = data, params = params)
         except httpx.HTTPStatusError as exc:
             # Suppress 404s as the desired state has been reached
             if exc.response.status_code != 404:

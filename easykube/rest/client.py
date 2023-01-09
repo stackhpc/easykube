@@ -58,11 +58,20 @@ class BaseClient(Flowable):
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             # Make sure that the response is read while inside any required context managers
-            try:
+            if self.is_async:
                 yield exc.response.aread()
-            except RuntimeError:
+            else:
                 yield exc.response.read()
             raise exc
+
+    @flow
+    def delete(self, url, **kwargs):
+        """
+        Sends a delete request.
+
+        We override the delete from HTTPX in order to be able to send a request body.
+        """
+        return (yield self.request("DELETE", url, **kwargs))
 
 
 class SyncClient(BaseClient, httpx.Client):
