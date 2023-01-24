@@ -72,6 +72,10 @@ class Flowable:
     """
     __flow_executor__ = None
 
+    @property
+    def is_async(self):
+        return isinstance(self.__flow_executor__, AsyncExecutor)
+
     def get_flow_executor(self):
         return self.__flow_executor__
 

@@ -1,4 +1,5 @@
 import copy
+import enum
 
 from ... import rest
 from ...flow import flow
@@ -11,6 +12,15 @@ from .iterators import ListResponseIterator, WatchEvents
 PRESENT = object()
 #: Sentinel object indicating that a label must not be present
 ABSENT = object()
+
+
+class DeletePropagationPolicy(str, enum.Enum):
+    """
+    Enumeration of possible delete policies.
+    """
+    BACKGROUND = "Background"
+    FOREGROUND = "Foreground"
+    ORPHAN     = "Orphan"
 
 
 class Resource(rest.Resource):
@@ -159,8 +169,24 @@ class Resource(rest.Resource):
     def create_or_patch(self, id, data, /, namespace = None):
         return super().create_or_patch(id, data, namespace = namespace)
 
-    def delete(self, id, /, namespace = None):
-        return super().delete(id, namespace = namespace)
+    def delete(
+        self,
+        id,
+        /,
+        propagation_policy = DeletePropagationPolicy.BACKGROUND,
+        namespace = None
+    ):
+        if not isinstance(propagation_policy, DeletePropagationPolicy):
+            propagation_policy = DeletePropagationPolicy(propagation_policy)
+        return super().delete(
+            id,
+            {
+                "apiVersion": "v1",
+                "kind": "DeleteOptions",
+                "propagationPolicy": propagation_policy.value,
+            },
+            namespace = namespace
+        )
 
     @flow
     def delete_all(self, **params):
