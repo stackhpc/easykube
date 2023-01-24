@@ -26,6 +26,7 @@ class Resource(rest.Resource):
         self._namespaced = namespaced
 
     def _prepare_path(self, id = None, params = None):
+        params = params or {}
         namespace = params.pop("namespace", None) or self._client.default_namespace
         all_namespaces = params.pop("all_namespaces", False)
         if "labels" in params:
@@ -79,8 +80,8 @@ class Resource(rest.Resource):
         namespace = namespace or data.get("metadata", {}).get("namespace")
         return super().create(data, namespace = namespace)
 
-    def fetch(self, id, /, namespace = None):
-        return super().fetch(id, namespace = namespace)
+    def fetch(self, id, /, namespace = None, **params):
+        return super().fetch(id, namespace = namespace, **params)
 
     def replace(self, id, data, /, namespace = None):
         namespace = namespace or data.get("metadata", {}).get("namespace")
