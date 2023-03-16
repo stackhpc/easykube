@@ -117,6 +117,21 @@ class Resource(rest.Resource):
         return self._wrap_instance(self._extract_one(response))
 
     @flow
+    def json_merge_patch(self, id, data, /, namespace = None):
+        """
+        Patches the specified instance with the given data, treated as a JSON Patch.
+        """
+        yield self._ensure_initialised()
+        path, params = self._prepare_path(id, { "namespace": namespace })
+        response = yield self._client.patch(
+            path,
+            json = data,
+            params = params,
+            headers = { "Content-Type": "application/merge-patch+json" }
+        )
+        return self._wrap_instance(self._extract_one(response))
+
+    @flow
     def server_side_apply(
         self,
         id,
@@ -189,13 +204,28 @@ class Resource(rest.Resource):
         )
 
     @flow
-    def delete_all(self, **params):
+    def delete_all(
+        self,
+        /,
+        propagation_policy = DeletePropagationPolicy.BACKGROUND,
+        **params
+    ):
         """
         Deletes a collection of resources.
         """
+        if not isinstance(propagation_policy, DeletePropagationPolicy):
+            propagation_policy = DeletePropagationPolicy(propagation_policy)
         yield self._ensure_initialised()
         path, params = self._prepare_path(params = params)
-        yield self._client.delete(path, params = params)
+        yield self._client.delete(
+            path,
+            json = {
+                "apiVersion": "v1",
+                "kind": "DeleteOptions",
+                "propagationPolicy": propagation_policy.value,
+            },
+            params = params
+        )
 
     @flow
     def watch_list(self, **params):
