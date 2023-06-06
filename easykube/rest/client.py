@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 
@@ -34,20 +35,8 @@ class BaseClient(Flowable):
         Sends the given request as part of a flow.
         """
         response = yield super().send(request, **kwargs)
-        self.log_response(response)
         yield self.raise_for_status(response)
         return response
-
-    def log_response(self, response):
-        """
-        Logs the response using standard Python logging.
-        """
-        logger.info(
-            "API request: \"%s %s\" %s",
-            response.request.method,
-            response.request.url,
-            response.status_code
-        )
 
     @flow
     def raise_for_status(self, response):
@@ -86,3 +75,19 @@ class AsyncClient(BaseClient, httpx.AsyncClient):
     Class for a REST client.
     """
     __flow_executor__ = AsyncExecutor()
+
+    async def _send_single_request(self, request):
+        # anyio.fail_after seems to raise a TimeoutError even when the task is cancelled
+        # from the outside rather than because it reaches the deadline
+        # This is then translated into a PoolTimeout by httpx, even though the connection
+        # pool has plenty of availability
+        # We can prevent this while still allowing the request to appear cancelled from
+        # the outside by shielding the request coroutine
+        # This will mean that the request will continue until it is fulfilled, even if
+        # nothing is waiting for it, but means PoolTimeouts will only be raised when
+        # we genuinely fail to get a connection from the pool
+        # As per the advice in the docs for shield, we maintain a reference to the
+        # wrapped coroutine to avoid it being garbage collected too early
+        coro = super()._send_single_request(request)
+        response = await asyncio.shield(coro)
+        return response
