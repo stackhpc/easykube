@@ -76,18 +76,36 @@ class AsyncClient(BaseClient, httpx.AsyncClient):
     """
     __flow_executor__ = AsyncExecutor()
 
-    # async def _send_single_request(self, request):
-    #     # anyio.fail_after seems to raise a TimeoutError even when the task is cancelled
-    #     # from the outside rather than because it reaches the deadline
-    #     # This is then translated into a PoolTimeout by httpx, even though the connection
-    #     # pool has plenty of availability
-    #     # We can prevent this while still allowing the request to appear cancelled from
-    #     # the outside by shielding the request coroutine
-    #     # This will mean that the request will continue until it is fulfilled, even if
-    #     # nothing is waiting for it, but means PoolTimeouts will only be raised when
-    #     # we genuinely fail to get a connection from the pool
-    #     # As per the advice in the docs for shield, we maintain a reference to the
-    #     # wrapped coroutine to avoid it being garbage collected too early
-    #     coro = super()._send_single_request(request)
-    #     response = await asyncio.shield(coro)
-    #     return response
+    async def send(self, request, **kwargs):
+        """
+        Sends the given request as part of a flow.
+        """
+        response = await super().send(request, **kwargs)
+        await self.raise_for_status(response)
+        return response
+
+    async def raise_for_status(self, response):
+        """
+        Raise the relevant exception for the response, if required.
+        """
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # Make sure that the response is read while inside any required context managers
+            await exc.response.aread()
+
+    async def _send_single_request(self, request):
+        # anyio.fail_after seems to raise a TimeoutError even when the task is cancelled
+        # from the outside rather than because it reaches the deadline
+        # This is then translated into a PoolTimeout by httpx, even though the connection
+        # pool has plenty of availability
+        # We can prevent this while still allowing the request to appear cancelled from
+        # the outside by shielding the request coroutine
+        # This will mean that the request will continue until it is fulfilled, even if
+        # nothing is waiting for it, but means PoolTimeouts will only be raised when
+        # we genuinely fail to get a connection from the pool
+        # As per the advice in the docs for shield, we maintain a reference to the
+        # wrapped coroutine to avoid it being garbage collected too early
+        coro = super()._send_single_request(request)
+        response = await asyncio.shield(coro)
+        return response
