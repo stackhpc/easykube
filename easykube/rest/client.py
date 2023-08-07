@@ -37,8 +37,10 @@ class BaseClient(Flowable):
         response = yield super().send(request, **kwargs)
         yield self.raise_for_status(response)
         if self.is_async:
+            yield response.aread()
             yield response.aclose()
         else:
+            response.read()
             response.close()
         return response
 
