@@ -4,7 +4,5 @@ from .kubernetes import (
     ApiError,
     AsyncClient,
     Configuration,
-    ResourceSpec,
     SyncClient,
-    resources
 )

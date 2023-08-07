@@ -5,4 +5,4 @@ from .iterators import (
     ByteStreamIterator,
     TextStreamIterator
 )
-from .resource import Resource
+from .resource import AsyncResource, SyncResource

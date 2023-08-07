@@ -1,22 +1,16 @@
-from ...flow import Flowable, flow
-
-from .resource import Resource
+from .resource import SyncResource, AsyncResource
 
 
-class Api(Flowable):
+class BaseApi:
     """
-    Class for a Kubernetes API.
+    Base class for a Kubernetes API.
     """
     def __init__(self, client, api_version):
         self._client = client
         self._api_version = api_version
+        prefix = "/apis" if "/" in self._api_version else "/api"
+        self._api_path = f"{prefix}/{self._api_version}"
         self._resources = None
-
-    def get_flow_executor(self):
-        """
-        Returns the flow executor to use.
-        """
-        return self._client.get_flow_executor()
 
     @property
     def api_version(self):
@@ -24,18 +18,36 @@ class Api(Flowable):
         Returns the API version for the API.
         """
         return self._api_version
-
-    def _ensure_resources(self):
+    
+    def _set_resources(self, response):
         """
-        Ensures that the resources have been loaded.
+        Processes the resources from a successful response.
         """
-        if self._resources is None:
-            prefix = "/apis" if "/" in self._api_version else "/api"
-            response = yield self._client.get(f"{prefix}/{self._api_version}")
-            self._resources = { r["name"]: r for r in response.json()["resources"] }
-        return self._resources
+        self._resources = { r["name"]: r for r in response.json()["resources"] }
 
-    @flow
+    def _lookup_resource(self, name):
+        """
+        Looks up the named resource in the stored resources.
+        """
+        # First try a lookup by plural name
+        try:
+            return self._resources[name]
+        except KeyError:
+            # Then try a lookup by singular name or kind
+            try:
+                return next(
+                    r
+                    for r in self._resources.values()
+                    if r["kind"] == name or r["singularName"] == name
+                )
+            except StopIteration:
+                raise ValueError(f"API '{self._api_version}' has no resource '{name}'")
+
+
+class SyncApi(BaseApi):
+    """
+    API object for use with sync clients.
+    """
     def resource(self, name):
         """
         Returns a resource for the given name.
@@ -43,21 +55,33 @@ class Api(Flowable):
         The given name can be either the plural name, the singular name or the kind.
         Lookups by plural name will be faster as that is the key that is indexed.
         """
-        resources = yield self._ensure_resources()
-        # First try a lookup by plural name
-        try:
-            resource = resources[name]
-        except KeyError:
-            # Then try a lookup by singular name or kind
-            try:
-                resource = next(
-                    r
-                    for r in resources.values()
-                    if r["kind"] == name or r["singularName"] == name
-                )
-            except StopIteration:
-                raise ValueError(f"API '{self._api_version}' has no resource '{name}'")
-        return Resource(
+        if self._resources is None:
+            self._set_resources(self._client.get(self._api_path))
+        resource = self._lookup_resource(name)
+        return SyncResource(
+            self._client,
+            self._api_version,
+            resource["name"],
+            resource["kind"],
+            resource["namespaced"]
+        )
+
+
+class AsyncApi(BaseApi):
+    """
+    API object for use with sync clients.
+    """
+    async def resource(self, name):
+        """
+        Returns a resource for the given name.
+
+        The given name can be either the plural name, the singular name or the kind.
+        Lookups by plural name will be faster as that is the key that is indexed.
+        """
+        if self._resources is None:
+            self._set_resources(await self._client.get(self._api_path))
+        resource = self._lookup_resource(name)
+        return AsyncResource(
             self._client,
             self._api_version,
             resource["name"],

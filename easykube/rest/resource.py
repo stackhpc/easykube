@@ -2,8 +2,6 @@ import logging
 
 import httpx
 
-from ..flow import Flowable, flow
-
 from .iterators import ListResponseIterator
 from .util import PropertyDict
 
@@ -11,9 +9,9 @@ from .util import PropertyDict
 logger = logging.getLogger(__name__)
 
 
-class Resource(Flowable):
+class BaseResource:
     """
-    Class for a REST resource.
+    Base class for REST resources.
     """
     __iterator_class__ = ListResponseIterator
 
@@ -21,21 +19,6 @@ class Resource(Flowable):
         self._client = client
         self._name = name.strip("/")
         self._prefix = prefix or "/"
-
-    def get_flow_executor(self):
-        """
-        Returns the flow executor to use.
-        """
-        return self._client.get_flow_executor()
-
-    def _ensure_initialised(self):
-        """
-        Ensures that the resource is fully initialised including any HTTP operations.
-
-        This will be called multiple times, so should become a no-op in the case where
-        the resource is already initialised.
-        """
-        # By default, this is a noop
 
     def _prepare_path(self, id = None, params = None):
         """
@@ -95,101 +78,181 @@ class Resource(Flowable):
         Returns an iterable of the resource instances that match the given parameters.
         """
         return self.__iterator_class__(self._client, self, params)
+    
 
-    @flow
+class SyncResource(BaseResource):
+    """
+    Resource class to use with sync clients.
+    """
     def first(self, **params):
         """
         Returns the first instance of a resource that matches the parameters, or None if one
         does not exist.
         """
-        try:
-            return (yield self.list(**params)._next_item())
-        except ListResponseIterator.StopIteration:
-            return None
+        return next(self.list(**params), None)
 
-    @flow
     def create(self, data, **params):
         """
         Creates an instance of the resource and returns it.
         """
-        yield self._ensure_initialised()
         path, params = self._prepare_path(params = params)
         data = self._prepare_data(data, params = params)
-        response = yield self._client.post(path, json = data, params = params)
+        response = self._client.post(path, json = data, params = params)
         return self._wrap_instance(self._extract_one(response))
 
-    @flow
     def fetch(self, id, **params):
         """
         Returns the data for the specified instance.
         """
-        yield self._ensure_initialised()
         path, params = self._prepare_path(id, params)
-        response = yield self._client.get(path, params = params)
+        response = self._client.get(path, params = params)
         return self._wrap_instance(self._extract_one(response))
 
-    @flow
     def replace(self, id, data, **params):
         """
         Replaces the specified instance with the given data.
         """
-        yield self._ensure_initialised()
         path, params = self._prepare_path(id, params)
         data = self._prepare_data(data, id, params)
-        response = yield self._client.put(path, json = data, params = params)
+        response = self._client.put(path, json = data, params = params)
         return self._wrap_instance(self._extract_one(response))
 
-    @flow
     def patch(self, id, data, **params):
         """
         Patches the specified instance with the given data.
         """
-        yield self._ensure_initialised()
         path, params = self._prepare_path(id, params)
         data = self._prepare_data(data, id, params)
-        response = yield self._client.patch(path, json = data, params = params)
+        response = self._client.patch(path, json = data, params = params)
         return self._wrap_instance(self._extract_one(response))
 
     def _create_or_update(self, method, id, data, params):
         """
-        Flow that attempts to update an instance using the given data and method. If the
-        instance does not exist, it is created with the given data.
+        Attempt to update an instance using the given data and method. If the instance does
+        not exist, it is created with the given data.
         """
         # Always prepare the data with the id, even for a create
         data = self._prepare_data(data, id, params)
         try:
-            return (yield method(id, data, **params))
+            return method(id, data, **params)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
-                return (yield self.create(data, **params))
+                return self.create(data, **params)
             else:
                 raise
 
-    @flow
     def create_or_replace(self, id, data, **params):
         """
         Attempts to replace the specified instance of the resource with the given data.
         If it does not exist, a new instance is created with the given data instead.
         """
-        return (yield self._create_or_update(self.replace, id, data, params))
+        return self._create_or_update(self.replace, id, data, params)
 
-    @flow
     def create_or_patch(self, id, data, **params):
         """
         Attempts to patch the specified instance of the resource with the given data.
         If it does not exist, a new instance is created with the given data instead.
         """
-        return (yield self._create_or_update(self.patch, id, data, params))
+        return self._create_or_update(self.patch, id, data, params)
 
-    @flow
     def delete(self, id, data = None, **params):
         """
         Delete the specified instance.
         """
-        yield self._ensure_initialised()
         path, params = self._prepare_path(id, params)
         try:
-            yield self._client.delete(path, json = data, params = params)
+            self._client.delete(path, json = data, params = params)
+        except httpx.HTTPStatusError as exc:
+            # Suppress 404s as the desired state has been reached
+            if exc.response.status_code != 404:
+                raise
+
+
+class AsyncResource(BaseResource):
+    """
+    Resource class to use with async clients.
+    """
+    async def first(self, **params):
+        """
+        Returns the first instance of a resource that matches the parameters, or None if one
+        does not exist.
+        """
+        try:
+            return await self.list(**params).__anext__()
+        except StopAsyncIteration:
+            return None
+
+    async def create(self, data, **params):
+        """
+        Creates an instance of the resource and returns it.
+        """
+        path, params = self._prepare_path(params = params)
+        data = self._prepare_data(data, params = params)
+        response = await self._client.post(path, json = data, params = params)
+        return self._wrap_instance(self._extract_one(response))
+
+    async def fetch(self, id, **params):
+        """
+        Returns the data for the specified instance.
+        """
+        path, params = self._prepare_path(id, params)
+        response = await self._client.get(path, params = params)
+        return self._wrap_instance(self._extract_one(response))
+
+    async def replace(self, id, data, **params):
+        """
+        Replaces the specified instance with the given data.
+        """
+        path, params = self._prepare_path(id, params)
+        data = self._prepare_data(data, id, params)
+        response = await self._client.put(path, json = data, params = params)
+        return self._wrap_instance(self._extract_one(response))
+
+    async def patch(self, id, data, **params):
+        """
+        Patches the specified instance with the given data.
+        """
+        path, params = self._prepare_path(id, params)
+        data = self._prepare_data(data, id, params)
+        response = await self._client.patch(path, json = data, params = params)
+        return self._wrap_instance(self._extract_one(response))
+
+    async def _create_or_update(self, method, id, data, params):
+        """
+        Attempt to update an instance using the given data and method. If the instance does
+        not exist, it is created with the given data.
+        """
+        # Always prepare the data with the id, even for a create
+        data = self._prepare_data(data, id, params)
+        try:
+            return await method(id, data, **params)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return await self.create(data, **params)
+            else:
+                raise
+
+    async def create_or_replace(self, id, data, **params):
+        """
+        Attempts to replace the specified instance of the resource with the given data.
+        If it does not exist, a new instance is created with the given data instead.
+        """
+        return await self._create_or_update(self.replace, id, data, params)
+
+    async def create_or_patch(self, id, data, **params):
+        """
+        Attempts to patch the specified instance of the resource with the given data.
+        If it does not exist, a new instance is created with the given data instead.
+        """
+        return await self._create_or_update(self.patch, id, data, params)
+
+    async def delete(self, id, data = None, **params):
+        """
+        Delete the specified instance.
+        """
+        path, params = self._prepare_path(id, params)
+        try:
+            await self._client.delete(path, json = data, params = params)
         except httpx.HTTPStatusError as exc:
             # Suppress 404s as the desired state has been reached
             if exc.response.status_code != 404:

@@ -2,35 +2,22 @@ import contextlib
 import json
 import logging
 
-from ..flow import Flowable, flow
-
 
 logger = logging.getLogger(__name__)
 
 
-class ListResponseIterator(Flowable):
+class ListResponseIterator:
     """
     Iterator for list responses.
 
     Can be used as either a sync or async iterator depending on the client that is given.
     """
-    class StopIteration(Exception):
-        """
-        Exception raised to indicate that a list response has finished iterating.
-        """
-
     def __init__(self, client, resource, params):
         self._client = client
         self._resource = resource
         self._data = []
         self._next_index = 0
         self._next_url, self._next_params = resource._prepare_path(params = params)
-
-    def get_flow_executor(self):
-        """
-        Returns the flow executor to use.
-        """
-        return self._client.get_flow_executor()
 
     def _extract_list(self, response):
         """
@@ -49,24 +36,29 @@ class ListResponseIterator(Flowable):
         is required are rare.
         """
         return self._resource._extract_next_page(response)
+    
+    def _is_exhausted(self):
+        """
+        Indicates if we need to try and load more data.
+        """
+        return self._next_index >= len(self._data) and self._next_url
+    
+    def _handle_response(self, response):
+        """
+        Handles a list response.
+        """
+        self._data = self._extract_list(response)
+        self._next_index = 0
+        self._next_url, self._next_params = self._extract_next_page(response) or (None, None)
 
-    @flow
-    def _next_item(self):
+    def _next_item(self, exception_class):
         """
-        Flow that returns the next item in the iterator.
+        Returns the next item to yield.
         """
-        yield self._resource._ensure_initialised()
-        # If we have run out of data, try to load some more
-        if self._next_index >= len(self._data) and self._next_url:
-            response = yield self._client.get(self._next_url, params = self._next_params)
-            self._data = self._extract_list(response)
-            self._next_index = 0
-            self._next_url, self._next_params = self._extract_next_page(response) or (None, None)
-        # Return the item at the next index before incrementing it
         try:
             next_item = self._data[self._next_index]
         except IndexError:
-            raise self.StopIteration
+            raise exception_class()
         else:
             self._next_index = self._next_index + 1
             return self._resource._wrap_instance(next_item)
@@ -75,19 +67,19 @@ class ListResponseIterator(Flowable):
         return self
 
     def __next__(self):
-        try:
-            return self._next_item()
-        except self.StopIteration:
-            raise StopIteration
+        if self._is_exhausted():
+            response = self._client.get(self._next_url, params = self._next_params)
+            self._handle_response(response)
+        return self._next_item(StopIteration)
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
-        try:
-            return await self._next_item()
-        except self.StopIteration:
-            raise StopAsyncIteration
+        if self._is_exhausted():
+            response = await self._client.get(self._next_url, params = self._next_params)
+            self._handle_response(response)
+        return self._next_item(StopAsyncIteration)
 
 
 class StreamIterator:
