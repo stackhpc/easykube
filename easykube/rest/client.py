@@ -36,6 +36,10 @@ class BaseClient(Flowable):
         """
         response = yield super().send(request, **kwargs)
         yield self.raise_for_status(response)
+        if self.is_async:
+            yield response.aclose()
+        else:
+            response.close()
         return response
 
     @flow
@@ -75,24 +79,6 @@ class AsyncClient(BaseClient, httpx.AsyncClient):
     Class for a REST client.
     """
     __flow_executor__ = AsyncExecutor()
-
-    async def send(self, request, **kwargs):
-        """
-        Sends the given request as part of a flow.
-        """
-        response = await super().send(request, **kwargs)
-        await self.raise_for_status(response)
-        return response
-
-    async def raise_for_status(self, response):
-        """
-        Raise the relevant exception for the response, if required.
-        """
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            # Make sure that the response is read while inside any required context managers
-            await exc.response.aread()
 
     async def _send_single_request(self, request):
         # anyio.fail_after seems to raise a TimeoutError even when the task is cancelled
