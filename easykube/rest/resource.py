@@ -21,6 +21,8 @@ class Resource(Flowable):
         self._client = client
         self._name = name.strip("/")
         self._prefix = prefix or "/"
+        if not self._prefix.endswith("/"):
+            self._prefix = self._prefix + "/"
 
     def get_flow_executor(self):
         """
