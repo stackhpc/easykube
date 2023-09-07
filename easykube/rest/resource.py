@@ -196,3 +196,23 @@ class Resource(Flowable):
             # Suppress 404s as the desired state has been reached
             if exc.response.status_code != 404:
                 raise
+
+    @flow
+    def action(self, id, action, data = None, **params):
+        """
+        Executes an "action" for the specified instance.
+
+        Executing an action means making a POST request to `/<resourcepath>/<id>/<action>`.
+        """
+        yield self._ensure_initialised()
+        path, params = self._prepare_path(id, params)
+        # Add the action onto the path, making care to preserve any trailing slashes
+        action_path = f"{path}{action}/" if path.endswith("/") else f"{path}/{action}"
+        response = yield self._client.post(action_path, json = data, params = params)
+        content_type = response.headers.get("content-type")
+        if content_type == "application/json":
+            return response.json()
+        elif content_type == "text/plain":
+            return response.text
+        else:
+            return response.content
