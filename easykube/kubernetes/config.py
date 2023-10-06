@@ -97,6 +97,8 @@ class Configuration:
             ca_file = file_or_data(cluster, "certificate-authority")
             if ca_file:
                 kwargs.setdefault("verify", ca_file)
+        if "proxy-url" in cluster:
+            kwargs.setdefault("proxies", cluster["proxy-url"])
         user = next(
             u["user"]
             for u in kubeconfig["users"]
