@@ -98,7 +98,7 @@ class Configuration:
             if ca_file:
                 kwargs.setdefault("verify", ca_file)
         if "proxy-url" in cluster:
-            kwargs.setdefault("proxies", cluster["proxy-url"])
+            kwargs.setdefault("proxy", cluster["proxy-url"])
         user = next(
             u["user"]
             for u in kubeconfig["users"]
