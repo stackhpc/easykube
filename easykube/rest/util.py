@@ -12,10 +12,7 @@ class PropertyDict(MutableMapping):
         """
         If the given value is a dict, wrap it in a property dict.
         """
-        if isinstance(value, dict) and not isinstance(value, self.__class__):
-            return self.__class__(value)
-        else:
-            return value
+        return self.__class__(value) if isinstance(value, dict) else value
 
     def __getitem__(self, key):
         return self._wrap(self.__dict__["_wrapped"].__getitem__(key))
