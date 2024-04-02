@@ -6,27 +6,8 @@ import httpx
 
 from ..flow import Flowable, flow, AsyncExecutor, SyncExecutor
 
-from .util import PropertyDict
-
 
 logger = logging.getLogger(__name__)
-
-
-class JsonEncoder:
-    """
-    JSON encoder that can serialize our PropertyDict and calls out to a
-    child encoder for all other object types.
-    """
-    def __init__(self, wrapped_encoder):
-        self.wrapped_encoder = wrapped_encoder
-
-    def __call__(self, obj):
-        if isinstance(obj, PropertyDict):
-            return dict(obj)
-        if self.wrapped_encoder:
-            return self.wrapped_encoder(obj)
-        else:
-            raise TypeError
 
 
 class BaseClient(Flowable):
@@ -35,7 +16,7 @@ class BaseClient(Flowable):
     """
     def __init__(self, /, json_encoder = None, **kwargs):
         super().__init__(**kwargs)
-        self._json_encoder = JsonEncoder(json_encoder)
+        self._json_encoder = json_encoder
 
     @flow
     def request(self, method, url, **kwargs):
