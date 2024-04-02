@@ -1,33 +1,39 @@
 from collections.abc import MutableMapping
 
 
-class PropertyDict(MutableMapping):
+class PropertyDict(dict):
     """
-    View onto a dictionary that allows property-based access.
+    Dictionary that also supports property access.
     """
-    def __init__(self, wrapped):
-        self.__dict__["_wrapped"] = wrapped
+    def __init__(self, *args, **kwargs):
+        super().__init__(
+            {
+                k: self._wrap(v)
+                for k, v in dict(*args, **kwargs).items()
+            }
+        )
 
     def _wrap(self, value):
-        """
-        If the given value is a dict, wrap it in a property dict.
-        """
-        return self.__class__(value) if isinstance(value, dict) else value
-
-    def __getitem__(self, key):
-        return self._wrap(self.__dict__["_wrapped"].__getitem__(key))
+        if isinstance(value, PropertyDict):
+            return value
+        elif isinstance(value, dict):
+            return PropertyDict(value)
+        else:
+            return value
 
     def __setitem__(self, key, value):
-        self.__dict__["_wrapped"].__setitem__(key, value)
+        super().__setitem__(key, self._wrap(value))
 
-    def __delitem__(self, key):
-        self.__dict__["_wrapped"].__delitem__(key)
+    def setdefault(self, key, default = None):
+        return super().setdefault(key, self._wrap(default))
 
-    def __iter__(self):
-        yield from self.__dict__["_wrapped"].keys()
-
-    def __len__(self):
-        return self.__dict__["_wrapped"].__len__()
+    def update(self, *args, **kwargs):
+        super().update(
+            {
+                k: self._wrap(v)
+                for k, v in dict(*args, **kwargs).items()
+            }
+        )
 
     def __getattr__(self, name):
         try:
@@ -35,10 +41,5 @@ class PropertyDict(MutableMapping):
         except KeyError:
             raise AttributeError(f"'{self.__class__.__name__}' has no attribute '{name}'")
 
-    def __setattr__(self, name, value):
-        self[name] = value
-
     def __repr__(self):
-        class_name = self.__class__.__name__
-        data = self.__dict__["_wrapped"].__repr__()
-        return f"{class_name}({data})"
+        return f"{self.__class__.__name__}({super().__repr__()})"
