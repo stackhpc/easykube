@@ -1,4 +1,4 @@
-from collections.abc import MutableMapping
+from yaml.representer import SafeRepresenter
 
 
 class PropertyDict(dict):
@@ -43,3 +43,7 @@ class PropertyDict(dict):
 
     def __repr__(self):
         return f"{self.__class__.__name__}({super().__repr__()})"
+    
+
+# Make sure that YAML represents a PropertyDict like a regular dict
+SafeRepresenter.add_representer(PropertyDict, SafeRepresenter.represent_dict)
