@@ -86,6 +86,18 @@ class Resource(rest.Resource):
             data.setdefault("metadata", {}).update(name = id)
         return data
 
+    @property
+    def api_version(self):
+        return self._api_version
+
+    @property
+    def kind(self):
+        return self._kind
+
+    @property
+    def namespaced(self):
+        return self._namespaced
+
     def create(self, data, /, namespace = None):
         namespace = namespace or data.get("metadata", {}).get("namespace")
         return super().create(data, namespace = namespace)

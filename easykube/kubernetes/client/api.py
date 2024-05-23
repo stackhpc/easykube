@@ -36,6 +36,14 @@ class Api(Flowable):
         return self._resources
 
     @flow
+    def resources(self):
+        """
+        Returns the resources for the API.
+        """
+        resources = yield self._ensure_resources()
+        return resources.values()
+
+    @flow
     def resource(self, name):
         """
         Returns a resource for the given name.
