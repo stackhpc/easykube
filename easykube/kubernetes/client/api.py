@@ -25,11 +25,11 @@ class Api(Flowable):
         """
         return self._api_version
 
-    def _ensure_resources(self):
+    def _ensure_resources(self, refresh_cache = False):
         """
         Ensures that the resources have been loaded.
         """
-        if self._resources is None:
+        if self._resources is None or refresh_cache:
             prefix = "/apis" if "/" in self._api_version else "/api"
             response = yield self._client.get(f"{prefix}/{self._api_version}")
             self._resources = { r["name"]: r for r in response.json()["resources"] }
@@ -43,15 +43,8 @@ class Api(Flowable):
         resources = yield self._ensure_resources()
         return resources.values()
 
-    @flow
-    def resource(self, name):
-        """
-        Returns a resource for the given name.
-
-        The given name can be either the plural name, the singular name or the kind.
-        Lookups by plural name will be faster as that is the key that is indexed.
-        """
-        resources = yield self._ensure_resources()
+    def _resource(self, name, refresh_cache = False):
+        resources = yield self._ensure_resources(refresh_cache)
         # First try a lookup by plural name
         try:
             resource = resources[name]
@@ -72,3 +65,19 @@ class Api(Flowable):
             resource["kind"],
             resource["namespaced"]
         )
+
+    @flow
+    def resource(self, name):
+        """
+        Returns a resource for the given name.
+
+        The given name can be either the plural name, the singular name or the kind.
+        Lookups by plural name will be faster as that is the key that is indexed.
+        """
+        # Try once using the cached resources
+        # If that fails, try again with a refreshed cache
+        # If that still fails, raise
+        try:
+            return (yield self._resource(name))
+        except ValueError:
+            return (yield self._resource(name, True))
