@@ -51,7 +51,7 @@ class Controller:
                 ],
                 labels = labels,
                 namespace = namespace
-            )
+            ),
         ]
 
     def owns(
